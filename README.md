@@ -59,3 +59,78 @@ aws sqs get-queue-attributes --queue-url https://sqs.region.amazonaws.com/123456
 ![cloudwatch](./cloudwatch.png)
 
 部署完成。
+
+## 减少SPOT造成中断
+因为SPOT实例中断前2分钟会有通知，所以我们可以提前两分钟让实例不再获取任务进行处理，等待关机。这里有分为两种情况，在EC2实例内部署代码检测，或在EC2实例外部署代码检测。我们将分别提供例子代码：
+
+* 在EC2实例内部署代码检测
+```
+#!/bin/bash
+
+TOKEN=`curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"`
+
+while sleep 5; do
+
+    HTTP_CODE=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s -w %{http_code} -o /dev/null http://169.254.169.254/latest/meta-data/spot/instance-action)
+
+    if [[ "$HTTP_CODE" -eq 401 ]] ; then
+        echo 'Refreshing Authentication Token'
+        TOKEN=`curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 30"`
+    elif [[ "$HTTP_CODE" -eq 200 ]] ; then
+        # Insert Your Code to Handle Interruption Here
+    else
+        echo 'Not Interrupted'
+    fi
+
+done
+```
+
+这段代码先检索了Instance Metadata Service访问令牌，然后使用令牌从Instance Metadata Service确认实例是否会中断。如2分钟后会被中断，会得到HTTP 200的返回，如不中断会返回404。返回200可以插入一些代码，去停止这台实例获取新任务。
+
+* 在EC2实例外部署代码检测
+可以参看repo中的spot-monitor.py文件，将本文件放到lambda中，使用EventBridge的SPOT实例interruption触发lambda，可以将send_notifications()替换为发现2分钟内会中断想执行的任务。
+
+## ASG Scale-in 时避免正处理任务的SPOT被回收
+参看以下示例代码(decrement-capacity.py)，将此代码融合进业务代码，当实例持续30秒没有接收到新的任务，则运行以下代码，实例将自行关闭，并且Desired Capacity值减1，实现Scale-in。
+
+```
+import json
+import boto3
+
+ec2_client = boto3.client('ec2')
+asg_client = boto3.client('autoscaling')
+
+def lambda_handler(event, context):
+    """
+    :param event: SNS message triggered event
+    :param context: AWS Lambda runtime context
+    :return: the json like info includes the instance id and the termination time,
+    """
+    msg = event['Records'][0]['Sns']['Message']
+    msg_json = json.loads(msg)
+    id = msg_json['Trigger']['Dimensions'][0]['value']
+    print("Instance id is " + str(id))
+
+    # get the the instance info
+    response = ec2_client.describe_instances(
+        Filters=[
+            {
+                'Name': 'instance-id',
+                'Values': [str(id)]
+            },
+        ],
+    )
+
+    # print the ASG name 
+    tags = response['Reservations'][0]['Instances'][0]['Tags']
+    autoscaling_name = next(t["Value"] for t in tags if t["Key"] == "aws:autoscaling:groupName")
+    print("Autoscaling name is - " + str(autoscaling_name))
+
+    response = asg_client.client.terminate_instance_in_auto_scaling_group(
+        InstanceIds=[
+            str(id),
+        ],
+        AutoScalingGroupName=str(autoscaling_name),
+        ShouldDecrementDesiredCapacity=True
+    )
+```
