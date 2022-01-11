@@ -10,7 +10,8 @@ def check_job():
 
 
 def send_notifications():
-    print("SEND MESSAGE TO SNS")
+    print("SEND MESSAGE TO SNS") # Insert Your Code to Handle Interruption Here
+  
 
 
 if __name__ == "__main__":
