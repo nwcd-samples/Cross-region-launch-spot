@@ -63,7 +63,7 @@ aws sqs get-queue-attributes --queue-url https://sqs.region.amazonaws.com/123456
 ## 减少SPOT造成中断
 因为SPOT实例中断前2分钟会有通知，所以我们可以提前两分钟让实例不再获取任务进行处理，等待关机。这里有分为两种情况，在EC2实例内部署代码检测，或在EC2实例外部署代码检测。我们将分别提供例子代码：
 
-* 在EC2实例内部署代码检测
+* 在EC2实例内部署代SHELL代码检测
 ```
 #!/bin/bash
 
@@ -87,8 +87,8 @@ done
 
 这段代码先检索了Instance Metadata Service访问令牌，然后使用令牌从Instance Metadata Service确认实例是否会中断。如2分钟后会被中断，会得到HTTP 200的返回，如不中断会返回404。返回200可以插入一些代码，去停止这台实例获取新任务。
 
-* 在EC2实例外部署代码检测
-可以参看repo中的spot-monitor.py文件，将本文件放到lambda中，使用EventBridge的SPOT实例interruption触发lambda，可以将send_notifications()替换为发现2分钟内会中断想执行的任务。
+* python BOTO3 检测 (实例内运行+实例外运行)
+参看repo中的spot-monitor.py文件，实例外执行检测，将本文件放到lambda中，使用EventBridge的SPOT实例interruption触发lambda，可以将send_notifications()替换为发现2分钟内会中断想执行的任务。也可以直接在实例内运行此段代码执行检测，会执行check_job，从实例内部查看Instance Metadata Service，获取SPOT中断通知。
 ```
 import schedule
 import time
